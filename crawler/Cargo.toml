@@ -1,0 +1,20 @@
+[package]
+name = "crawler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+reqwest = "0.11"
+scraper = "0.19"
+url = "2.5"
+clap = { version = "4.4", features = ["derive"] }
+chrono = "0.4"
+sha2 = "0.10"
+arrow = "53"
+parquet = { version = "53", features = ["arrow", "zstd"] }

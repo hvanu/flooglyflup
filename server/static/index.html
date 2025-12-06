@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FlooglyFlup Search</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container" x-data="searchApp()" @keydown.window="handleKeyboard($event)">
+        <div class="header">
+            <div class="logo">FlooglyFlup</div>
+            <div class="search-box">
+                <input 
+                    type="text" 
+                    class="search-input" 
+                    placeholder="Search the web..." 
+                    x-model="query"
+                    x-ref="searchInput"
+                    autocomplete="off"
+                    role="combobox"
+                    aria-expanded="showSuggestions"
+                    aria-autocomplete="list"
+                    @input="onInput()"
+                    @keydown.enter="onEnter()"
+                    @keydown.down.prevent="moveActive(1)"
+                    @keydown.up.prevent="moveActive(-1)"
+                    @keydown.escape="onEscape()"
+                    @focus="onFocus()"
+                    @blur="closeSuggestionsSoon()"
+                    autofocus
+                >
+                <button 
+                    class="search-button" 
+                    @click="search()"
+                    :disabled="loading || !query.trim()"
+                    x-text="loading ? 'Searching...' : 'Search'"
+                >
+                </button>
+
+                <!-- Typeahead / autocomplete dropdown -->
+                <ul class="suggestions" x-show="showSuggestions && suggestions.length > 0" x-cloak>
+                    <template x-for="(suggestion, index) in suggestions" :key="suggestion">
+                        <li 
+                            class="suggestion-item"
+                            :class="{ active: index === activeIndex }"
+                            @mousedown.prevent="selectSuggestion(suggestion)"
+                            @mouseenter="activeIndex = index"
+                        >
+                            <span class="suggestion-icon">&#128269;</span>
+                            <span class="suggestion-text" x-html="highlightMatch(suggestion)"></span>
+                        </li>
+                    </template>
+                </ul>
+            </div>
+            
+            <div class="help-text">
+                <strong>Advanced search:</strong> 
+                <code>site:github.com</code> 
+                <code>lang:en</code> 
+                <code>has:code</code>
+                | Shortcuts: <kbd>/</kbd> to focus, <kbd>Esc</kbd> to clear
+            </div>
+
+            <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced" x-text="showAdvanced ? 'Hide advanced options' : 'Advanced options'"></button>
+
+            <div class="filters" x-show="showAdvanced">
+                <div class="filter-group">
+                    <label class="filter-label">Language:</label>
+                    <select class="filter-input" x-model="lang">
+                        <option value="">Any</option>
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="pt">Portuguese</option>
+                        <option value="it">Italian</option>
+                        <option value="ru">Russian</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <option value="zh">Chinese</option>
+                        <option value="ar">Arabic</option>
+                        <option value="hi">Hindi</option>
+                        <option value="nl">Dutch</option>
+                        <option value="sv">Swedish</option>
+                        <option value="pl">Polish</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Date:</label>
+                    <select class="filter-input" x-model="dateRange">
+                        <option value="">Any time</option>
+                        <option value="1">Past 24 hours</option>
+                        <option value="7">Past week</option>
+                        <option value="30">Past month</option>
+                        <option value="365">Past year</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error message -->
+        <div class="error" x-show="error" x-text="error"></div>
+
+        <!-- Loading state -->
+        <div class="loading" x-show="loading">
+            <div class="spinner"></div>
+            <div style="margin-top: 12px;">Searching...</div>
+        </div>
+
+        <!-- Results info -->
+        <div class="results-info" x-show="!loading && results.length > 0">
+            <span x-text="`Found ${total} results in ${timeMs}ms`"></span>
+            <span x-text="`Showing ${results.length}`"></span>
+        </div>
+
+        <!-- Search results -->
+        <template x-for="result in results" :key="result.url">
+            <div class="result">
+                <div class="result-meta">
+                    <span class="result-url"><span class="result-domain" x-text="urlOrigin(result.url)"></span><span class="result-path" x-text="urlPath(result.url)"></span></span>
+                    <span x-show="result.language !== 'unknown'" class="badge badge-lang" x-text="result.language"></span>
+                </div>
+                <a :href="result.url" class="result-title" target="_blank" x-text="result.title"></a>
+                <div class="result-snippet" x-html="result.snippet"></div>
+            </div>
+        </template>
+
+        <!-- No results -->
+        <div class="no-results" x-show="!loading && searched && results.length === 0">
+            <p style="font-size: 18px; margin-bottom: 10px;">No results found</p>
+            <p style="font-size: 12px;">Try different keywords or remove filters</p>
+        </div>
+
+        <div class="footer">
+            <p>FlooglyFlup Search Engine</p>
+        </div>
+    </div>
+
+    <script>
+        function searchApp() {
+            return {
+                query: '',
+                lang: '',
+                dateRange: '',
+                showAdvanced: false,
+                results: [],
+                total: 0,
+                timeMs: 0,
+                loading: false,
+                error: null,
+                searched: false,
+
+                // Typeahead state
+                suggestions: [],
+                showSuggestions: false,
+                activeIndex: -1,
+                debounceTimer: null,
+                suggestAbortController: null,
+                lastSuggestQuery: '',
+
+                onInput() {
+                    this.activeIndex = -1;
+                    clearTimeout(this.debounceTimer);
+
+                    const q = this.query.trim();
+                    if (!q) {
+                        this.suggestions = [];
+                        this.showSuggestions = false;
+                        return;
+                    }
+
+                    this.debounceTimer = setTimeout(() => this.fetchSuggestions(q), 150);
+                },
+
+                async fetchSuggestions(q) {
+                    if (this.suggestAbortController) {
+                        this.suggestAbortController.abort();
+                    }
+                    this.suggestAbortController = new AbortController();
+
+                    try {
+                        const params = new URLSearchParams({ q, limit: '8' });
+                        const response = await fetch(`/api/suggest?${params}`, {
+                            signal: this.suggestAbortController.signal
+                        });
+                        if (!response.ok) return;
+
+                        const data = await response.json();
+                        if (this.query.trim() !== q) return;
+
+                        this.lastSuggestQuery = q;
+                        this.suggestions = data.suggestions || [];
+                        this.showSuggestions = this.suggestions.length > 0;
+                        this.activeIndex = -1;
+                    } catch (err) {
+                        if (err.name !== 'AbortError') {
+                            this.suggestions = [];
+                            this.showSuggestions = false;
+                        }
+                    }
+                },
+
+                onFocus() {
+                    if (this.suggestions.length > 0) {
+                        this.showSuggestions = true;
+                    }
+                },
+
+                closeSuggestionsSoon() {
+                    setTimeout(() => { this.showSuggestions = false; }, 100);
+                },
+
+                moveActive(delta) {
+                    if (!this.showSuggestions || this.suggestions.length === 0) return;
+                    const len = this.suggestions.length;
+                    this.activeIndex = (this.activeIndex + delta + len) % len;
+                },
+
+                selectSuggestion(suggestion) {
+                    this.query = suggestion;
+                    this.showSuggestions = false;
+                    this.suggestions = [];
+                    this.search();
+                },
+
+                onEnter() {
+                    if (this.showSuggestions && this.activeIndex >= 0 && this.suggestions[this.activeIndex]) {
+                        this.selectSuggestion(this.suggestions[this.activeIndex]);
+                    } else {
+                        this.showSuggestions = false;
+                        this.search();
+                    }
+                },
+
+                onEscape() {
+                    if (this.showSuggestions) {
+                        this.showSuggestions = false;
+                        this.activeIndex = -1;
+                    } else {
+                        this.query = '';
+                        this.results = [];
+                        this.searched = false;
+                        this.error = null;
+                    }
+                },
+
+                highlightMatch(suggestion) {
+                    const q = this.lastSuggestQuery;
+                    if (!q) return this.escapeHtml(suggestion);
+                    const lower = suggestion.toLowerCase();
+                    const idx = lower.indexOf(q.toLowerCase());
+                    if (idx === -1) return this.escapeHtml(suggestion);
+
+                    const before = this.escapeHtml(suggestion.slice(0, idx));
+                    const match = this.escapeHtml(suggestion.slice(idx, idx + q.length));
+                    const after = this.escapeHtml(suggestion.slice(idx + q.length));
+                    return `${before}<b>${match}</b>${after}`;
+                },
+
+                escapeHtml(str) {
+                    const div = document.createElement('div');
+                    div.textContent = str;
+                    return div.innerHTML;
+                },
+
+                async search() {
+                    if (!this.query.trim()) {
+                        this.error = 'Please enter a search query';
+                        return;
+                    }
+
+                    this.loading = true;
+                    this.error = null;
+                    this.searched = true;
+
+                    try {
+                        const params = new URLSearchParams({
+                            q: this.query,
+                            limit: '20'
+                        });
+
+                        if (this.lang) params.append('lang', this.lang);
+                        if (this.dateRange) {
+                            const from = new Date();
+                            from.setDate(from.getDate() - parseInt(this.dateRange, 10));
+                            params.append('date_from', from.toISOString().slice(0, 10));
+                        }
+
+                        const response = await fetch(`/api/search?${params}`);
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.error || 'Search failed');
+                        }
+
+                        const data = await response.json();
+                        this.results = data.results;
+                        this.total = data.total;
+                        this.timeMs = data.time_ms;
+                    } catch (err) {
+                        this.error = err.message;
+                        this.results = [];
+                        this.total = 0;
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                urlOrigin(url) {
+                    try {
+                        return new URL(url).origin;
+                    } catch {
+                        return url;
+                    }
+                },
+
+                urlPath(url) {
+                    try {
+                        const u = new URL(url);
+                        return u.pathname + u.search + u.hash;
+                    } catch {
+                        return '';
+                    }
+                },
+
+                handleKeyboard(event) {
+                    if (event.key === '/' && document.activeElement !== this.$refs.searchInput) {
+                        event.preventDefault();
+                        this.$refs.searchInput.focus();
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# High-quality domains/patterns
+.edu
+.ac.
+arxiv.org
+ieee.org
+acm.org
+nature.com
+science.org
+nih.gov
+github.com
+gitlab.com
+springer.com
+stackoverflow.com
+readthedocs
+docs.
+mozilla.org
+theguardian.com  
+thelancet.com  
+theregister.com
+thetimes.co.uk
+theverge.com
+w3.org
